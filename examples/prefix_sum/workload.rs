@@ -290,13 +290,10 @@ mod tests {
     use super::*;
     use std::num::NonZeroU32;
 
-    use clairo::{BenchmarkRunner, CaseId, CaseSummary, Suite};
+    use clairo::{BenchmarkRunner, CaseSummary, Suite};
 
     fn register_prefix_sum(suite: &mut Suite) -> Result<()> {
-        suite.register_case(
-            CaseId::try_new("prefix_sum", "elements=16384")?,
-            PrefixSum::new(16_384),
-        )?;
+        suite.register_case("prefix_sum/elements=16384", PrefixSum::new(16_384))?;
 
         Ok(())
     }
@@ -349,7 +346,7 @@ mod tests {
             .try_run(|suite| {
                 for elements in [3, 65, 16_384] {
                     suite.register_case(
-                        CaseId::try_new("prefix_sum", format!("elements={elements}"))?,
+                        format!("prefix_sum/elements={elements}"),
                         PrefixSum::new(elements),
                     )?;
                 }

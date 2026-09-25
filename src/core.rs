@@ -1,6 +1,7 @@
 use crate::{
-    CaseSelection, ErasedBenchmarkCase, GpuRequirements, GpuSession, IterationRecorder,
+    CaseId, CaseSelection, ErasedBenchmarkCase, GpuRequirements, GpuSession, IterationRecorder,
     IterationTiming, PassId, Repeatability, Suite, ValidationContext,
+    statistics::{mean_f64, quantile_sorted, sample_standard_deviation},
 };
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use futures_channel::oneshot;
@@ -18,7 +19,7 @@ pub const MAX_RECORDED_PASSES_PER_SAMPLE: usize = 2_047;
 /// the measured samples for one case, excluding calibration and preconditioning.
 #[derive(Debug)]
 pub struct CaseMeasurements {
-    pub case_id: Box<str>,
+    pub case_id: CaseId,
     pub iterations_per_sample: NonZeroU32,
     /// average GPU nanoseconds per iteration within each sample.
     pub samples_ns_per_iteration: Vec<f64>,
@@ -28,7 +29,7 @@ pub struct CaseMeasurements {
 /// descriptive statistics over the measured sample averages, in nanoseconds per iteration.
 #[derive(Debug)]
 pub struct CaseSummary {
-    pub case_id: Box<str>,
+    pub case_id: CaseId,
     pub sample_count: usize,
     pub iterations_per_sample: NonZeroU32,
     pub mean_ns_per_iteration: f64,
@@ -51,13 +52,13 @@ impl TryFrom<&CaseMeasurements> for CaseSummary {
     type Error = anyhow::Error;
 
     fn try_from(measurements: &CaseMeasurements) -> Result<Self> {
-        use crate::statistics::{mean_f64, quantile_sorted, sample_standard_deviation};
-
         let samples = &measurements.samples_ns_per_iteration;
+
         ensure!(
             !samples.is_empty(),
             "cannot summarize a case without samples"
         );
+
         ensure!(
             samples
                 .iter()
@@ -66,16 +67,21 @@ impl TryFrom<&CaseMeasurements> for CaseSummary {
         );
 
         let mean = mean_f64(samples);
+
         ensure!(
             mean.is_finite() && mean > 0.0,
             "sample mean is not finite and positive"
         );
+
         let standard_deviation = sample_standard_deviation(samples, mean);
+
         ensure!(
             standard_deviation.is_none_or(f64::is_finite),
             "sample standard deviation overflowed"
         );
+
         let coefficient_of_variation = standard_deviation.map(|deviation| deviation / mean);
+
         ensure!(
             coefficient_of_variation.is_none_or(f64::is_finite),
             "coefficient of variation overflowed"
@@ -83,6 +89,7 @@ impl TryFrom<&CaseMeasurements> for CaseSummary {
 
         let mut sorted = samples.clone();
         sorted.sort_by(f64::total_cmp);
+
         let first_quartile = quantile_sorted(&sorted, 0.25);
         let third_quartile = quantile_sorted(&sorted, 0.75);
 
@@ -295,7 +302,7 @@ async fn execute_case(
     validate_case(case, session, fixture.as_mut(), "final_validation").await?;
 
     Ok(CaseMeasurements {
-        case_id: case.case_id().full_id(),
+        case_id: case.case_id().clone(),
         iterations_per_sample: iterations,
         samples_ns_per_iteration,
         elapsed: case_started.elapsed(),

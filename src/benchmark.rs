@@ -15,7 +15,7 @@ use std::{any::Any, collections::BTreeSet, num::NonZeroUsize, pin::Pin};
 #[derive(Default)]
 pub struct Suite {
     cases: Vec<Box<dyn ErasedBenchmarkCase>>,
-    registered_case_ids: BTreeSet<Box<str>>,
+    registered_case_ids: BTreeSet<CaseId>,
 }
 
 impl Suite {
@@ -23,10 +23,15 @@ impl Suite {
         Self::default()
     }
 
-    pub fn register_case<C: BenchmarkCase>(&mut self, case_id: CaseId, case: C) -> Result<()> {
-        let id = case_id.full_id();
+    pub fn register_case<C: BenchmarkCase>(
+        &mut self,
+        label: impl Into<Box<str>>,
+        case: C,
+    ) -> Result<()> {
+        let case_id = CaseId::try_new(label)?;
+
         ensure!(
-            self.registered_case_ids.insert(id),
+            self.registered_case_ids.insert(case_id.clone()),
             "duplicate case: {:?}",
             case_id
         );
@@ -85,45 +90,36 @@ pub trait BenchmarkCase: 'static {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct CaseId {
-    // what you're benchmarking
-    function: Box<str>,
-    // what configuration you're benchmarking
-    parameter: Box<str>,
-}
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CaseId(Box<str>);
 
 impl CaseId {
-    pub fn try_new(function: impl Into<Box<str>>, parameter: impl Into<Box<str>>) -> Result<Self> {
-        let f = function.into();
-        let p = parameter.into();
-
+    pub fn try_new(label: impl Into<Box<str>>) -> Result<Self> {
         let valid_label = |s: &str| {
             let invalid = s.is_empty()
-                || s.contains('/')
                 || s.chars().any(char::is_control)
-                || *s.trim() != *s;
+                || *s.trim() != *s
+                || s.contains('/');
 
             !invalid
         };
 
-        ensure!(valid_label(&f), "invalid function name");
-        ensure!(valid_label(&p), "invalid parameter name");
+        let label = label.into();
+        ensure!(valid_label(&label), "invalid case name");
 
-        Ok(Self {
-            function: f,
-            parameter: p,
-        })
-    }
-
-    pub fn full_id(&self) -> Box<str> {
-        format!("{}/{}", self.function, self.parameter).into_boxed_str()
+        Ok(Self(label))
     }
 }
 
 impl std::fmt::Display for CaseId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.function, self.parameter)
+        write!(f, "{}", self.0)
+    }
+}
+
+impl AsRef<str> for CaseId {
+    fn as_ref(&self) -> &str {
+        &self.0
     }
 }
 

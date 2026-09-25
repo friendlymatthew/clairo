@@ -66,8 +66,8 @@ impl CaseSelection {
     pub fn matches(&self, case: &CaseId) -> bool {
         match &self {
             Self::All => true,
-            Self::Containing(pattern) => case.full_id().contains(pattern.as_ref()),
-            Self::Exact(full_id) => &case.full_id() == full_id,
+            Self::Containing(pattern) => case.as_ref().contains(pattern.as_ref()),
+            Self::Exact(full_id) => case.as_ref() == full_id.as_ref(),
         }
     }
 }

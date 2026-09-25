@@ -1,7 +1,7 @@
 mod workload;
 
 use anyhow::Result;
-use clairo::{BenchmarkRunner, CaseId, CaseSummary};
+use clairo::{BenchmarkRunner, CaseSummary};
 
 use crate::workload::PrefixSum;
 
@@ -9,7 +9,7 @@ fn main() -> Result<()> {
     let elements = 16_384;
     let measurements = BenchmarkRunner::default().try_run(|suite| {
         suite.register_case(
-            CaseId::try_new("prefix_sum", format!("elements={elements}"))?,
+            format!("prefix_sum|elements={elements}"),
             PrefixSum::new(elements),
         )
     })?;
