@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use crate::{CaseId, CaseMeasurements, Suite, core::run_suite};
+use crate::{CaseId, CaseMeasurements, CaseSummary, Suite, core::run_suite};
 use anyhow::Result;
 
 pub(crate) const DEFAULT_SAMPLE_SIZE: NonZeroU32 = NonZeroU32::new(100).unwrap();
@@ -24,6 +24,18 @@ impl Default for BenchmarkRunner {
 }
 
 impl BenchmarkRunner {
+    /// runs registered cases and prints each case's summary
+    pub fn run(self, register: impl FnOnce(&mut Suite) -> Result<()>) -> Result<()> {
+        let measurements = self.try_run(register)?;
+
+        for measurement in &measurements {
+            let summary = CaseSummary::try_from(measurement)?;
+            println!("{summary:?}");
+        }
+
+        Ok(())
+    }
+
     pub fn try_run(
         self,
         register: impl FnOnce(&mut Suite) -> Result<()>,
