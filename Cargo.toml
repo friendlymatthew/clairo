@@ -1,0 +1,13 @@
+[package]
+name = "clairo"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+futures-channel = "0.3.34"
+pollster = "1.0.1"
+wgpu = "30.0.1"
+
+[dev-dependencies]
+bytemuck = "1.25.2"
