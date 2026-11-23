@@ -1,0 +1,8 @@
+[package]
+name = "clairo-utils"
+version.workspace = true
+edition.workspace = true
+
+
+[dependencies]
+anyhow.workspace = true

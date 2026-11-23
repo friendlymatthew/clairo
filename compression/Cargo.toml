@@ -1,0 +1,9 @@
+[package]
+name = "clairo-compression"
+version.workspace = true
+edition.workspace = true
+
+
+[dependencies]
+anyhow.workspace = true
+utils.workspace = true

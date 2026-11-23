@@ -1,0 +1,12 @@
+[package]
+name = "clairo-net"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+compression.workspace = true
+utils.workspace = true
+rustls = "0.23.46"
+url = "2.5.8"
+webpki-roots = "1.0.12"

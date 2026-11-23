@@ -1,0 +1,15 @@
+[workspace]
+members = ["compression", "font", "net", "renderer", "utils"]
+default-members = ["renderer"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+anyhow = "1.0.104"
+compression = { package = "clairo-compression", path = "compression" }
+font = { package = "clairo-font", path = "font" }
+net = { package = "clairo-net", path = "net" }
+utils = { package = "clairo-utils", path = "utils" }

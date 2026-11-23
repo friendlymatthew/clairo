@@ -1,0 +1,154 @@
+use anyhow::{Result, anyhow, ensure};
+
+#[derive(Debug)]
+pub struct BitReader<'a, const MSB_FIRST: bool = false> {
+    data: &'a [u8],
+
+    byte_pos: usize,
+    buf: u64,
+    count: usize,
+}
+
+impl<'a> BitReader<'a, false> {
+    pub const fn new(data: &'a [u8]) -> Self {
+        Self::with_data(data)
+    }
+}
+
+#[cfg(test)]
+impl<'a> BitReader<'a, true> {
+    pub const fn new_msb(data: &'a [u8]) -> Self {
+        Self::with_data(data)
+    }
+}
+
+impl<'a, const MSB_FIRST: bool> BitReader<'a, MSB_FIRST> {
+    const fn with_data(data: &'a [u8]) -> Self {
+        Self {
+            data,
+
+            byte_pos: 0,
+            buf: 0,
+            count: 0,
+        }
+    }
+
+    pub const fn is_byte_aligned(&self) -> bool {
+        self.count.is_multiple_of(8)
+    }
+
+    pub const fn align_to_byte(&mut self) {
+        let leftover = self.count % 8;
+
+        if MSB_FIRST {
+            self.buf <<= leftover;
+        } else {
+            self.buf >>= leftover;
+        }
+
+        self.count -= leftover;
+    }
+
+    pub fn read_bits(&mut self, n: usize) -> Result<usize> {
+        if n == 0 {
+            return Ok(0);
+        }
+
+        ensure!(n < u64::BITS as usize, "bit count must be less than 64");
+
+        if self.count < n {
+            self.refill();
+            ensure!(self.count >= n, "unexpected EOF");
+        }
+
+        let out = if MSB_FIRST {
+            let out = self.buf >> (u64::BITS as usize - n);
+            self.buf <<= n;
+            out
+        } else {
+            let out = self.buf & ((1 << n) - 1);
+            self.buf >>= n;
+            out
+        };
+
+        self.count -= n;
+        Ok(out as usize)
+    }
+
+    pub fn read_bit(&mut self) -> Result<usize> {
+        self.read_bits(1)
+    }
+
+    pub fn read_array<const N: usize>(&mut self) -> Result<&'a [u8; N]> {
+        let out = self.read_bytes(N)?;
+        out.try_into().map_err(|e| anyhow!("{e:?}"))
+    }
+
+    pub fn read_bytes(&mut self, len: usize) -> Result<&'a [u8]> {
+        debug_assert!(self.is_byte_aligned(), "not byte aligned");
+
+        let start = self.byte_pos - self.count / 8;
+
+        let end = start
+            .checked_add(len)
+            .ok_or_else(|| anyhow!("unexpected eof"))?;
+
+        let out = self
+            .data
+            .get(start..end)
+            .ok_or_else(|| anyhow!("unexpected eof"))?;
+
+        self.byte_pos = end;
+        self.buf = 0;
+        self.count = 0;
+
+        Ok(out)
+    }
+
+    fn refill(&mut self) {
+        while self.count <= 56 && self.byte_pos < self.data.len() {
+            // safety: the loop condition guarantees byte_pos < data.len()
+            let byte = u64::from(unsafe { *self.data.get_unchecked(self.byte_pos) });
+
+            if MSB_FIRST {
+                self.buf |= byte << (56 - self.count);
+            } else {
+                self.buf |= byte << self.count;
+            }
+
+            self.count += 8;
+            self.byte_pos += 1;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bit_reader_basic() {
+        let mut r = BitReader::new(&[0b0000_0011, 0b0000_0001]);
+        assert_eq!(1, r.read_bit().unwrap());
+        assert_eq!(1, r.read_bits(3).unwrap());
+    }
+
+    #[test]
+    fn test_bit_reader_msb() {
+        let mut reader = BitReader::new_msb(&[0b1010_0000, 0b1101_0010]);
+        assert_eq!(reader.read_bits(4).unwrap(), 0b1010);
+        assert_eq!(reader.read_bit().unwrap(), 0);
+        assert_eq!(reader.read_bits(7).unwrap(), 0b000_1101);
+        assert_eq!(reader.read_bits(4).unwrap(), 0b0010);
+    }
+
+    #[test]
+    fn test_bit_reader_msb_alignment() {
+        let mut reader = BitReader::new_msb(&[0b1010_1111, 0b1101_0010, 0x35]);
+        assert_eq!(reader.read_bits(0).unwrap(), 0);
+        assert_eq!(reader.read_bits(4).unwrap(), 0b1010);
+        reader.align_to_byte();
+        assert_eq!(reader.read_bits(8).unwrap(), 0b1101_0010);
+        assert_eq!(reader.read_bytes(1).unwrap(), &[0x35]);
+    }
+}

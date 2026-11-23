@@ -1,0 +1,19 @@
+[package]
+name = "clairo-renderer"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "clairo"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+font.workspace = true
+net.workspace = true
+html5ever = "0.39"
+markup5ever_rcdom = "0.39"
+pollster = "0.3"
+wgpu = "30.0.2"
+winit = "0.30.13"
+bytemuck = "1.16"
