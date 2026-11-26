@@ -1,4 +1,7 @@
 mod deflate;
 mod gzip;
-pub use gzip::GZipReader;
 mod huffman;
+mod zlib;
+
+pub use gzip::GZipReader;
+pub use zlib::ZlibDecoder;

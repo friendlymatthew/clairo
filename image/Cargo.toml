@@ -1,0 +1,11 @@
+[package]
+name = "image"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+crc32fast = "1.5.6"
+
+anyhow.workspace = true
+utils.workspace = true
+compression.workspace = true

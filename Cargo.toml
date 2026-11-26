@@ -1,6 +1,5 @@
 [workspace]
-members = ["compression", "font", "net", "renderer", "utils"]
-default-members = ["renderer"]
+members = ["compression", "font", "image", "net", "renderer", "utils"]
 resolver = "3"
 
 [workspace.package]
@@ -13,3 +12,4 @@ compression = { package = "clairo-compression", path = "compression" }
 font = { package = "clairo-font", path = "font" }
 net = { package = "clairo-net", path = "net" }
 utils = { package = "clairo-utils", path = "utils" }
+image = { package = "clairo-image", path = "image" }

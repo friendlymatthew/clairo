@@ -23,6 +23,8 @@ pub fn layout_text(font: &TrueTypeFontFile<'_>, text: &str) -> Result<TextMesh> 
     for character in text.chars() {
         let glyph = shaper.shape_char(character);
 
+        // todo: do mesh(outline) per glyph once
+        // we can probably cache a lot of this work per character
         for mut vertex in mesh(&outline(font, glyph.glyph_id)?)? {
             let [x, y] = vertex.position;
             vertex.position = [glyph_x + x * scale, -y * scale];

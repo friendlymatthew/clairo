@@ -46,6 +46,16 @@ macro_rules! impl_read_slice {
         }
 
         #[allow(dead_code)]
+        fn read_array_with_fn<const N: usize, T: std::fmt::Debug>(
+            &mut self,
+            read_fn: impl Fn(&mut Self) -> ::anyhow::Result<T>,
+        ) -> ::anyhow::Result<[T; N]> {
+            self.read_vec(N, read_fn)?
+                .try_into()
+                .map_err(|e| ::anyhow::anyhow!("{e:?}"))
+        }
+
+        #[allow(dead_code)]
         fn read_slice(&mut self, len: usize) -> ::anyhow::Result<&'a [u8]> {
             let slice = self.peek_slice(len)?;
 
