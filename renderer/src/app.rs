@@ -204,7 +204,17 @@ impl Renderer {
         eprintln!("font parsing took {:?}", started.elapsed());
 
         let started = Instant::now();
-        let text = TextRenderer::new(&device, config.format, &[])?;
+
+        let format_features = adapter.get_texture_format_features(config.format).flags;
+        let samples = if format_features.sample_count_supported(4)
+            && format_features.contains(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_RESOLVE)
+        {
+            4
+        } else {
+            1
+        };
+
+        let text = TextRenderer::new(&device, config.format, &[], samples)?;
         eprintln!("Text renderer setup took {:?}", started.elapsed());
 
         Ok(Self {
@@ -286,7 +296,7 @@ impl Renderer {
 
         let mut encoder = self.device.create_command_encoder(&Default::default());
 
-        self.text.render(&mut encoder, &view);
+        self.text.render(&self.device, &mut encoder, &view);
 
         self.queue.submit([encoder.finish()]);
         self.window.pre_present_notify();

@@ -1,6 +1,6 @@
 struct CurveOutput {
     @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
+    @location(0) @interpolate(perspective, sample) uv: vec2<f32>,
     @location(1) @interpolate(flat) side: f32,
 }
 

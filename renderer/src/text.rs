@@ -6,6 +6,8 @@ pub struct TextRenderer {
     pipeline: wgpu::RenderPipeline,
     vertices: Option<wgpu::Buffer>,
     vertex_count: u32,
+    samples: u32,
+    msaa_target: Option<wgpu::Texture>,
 }
 
 impl TextRenderer {
@@ -13,6 +15,7 @@ impl TextRenderer {
         device: &wgpu::Device,
         surface_format: wgpu::TextureFormat,
         vertices: &[GlyphVertex],
+        samples: u32,
     ) -> Result<Self> {
         let shader = device.create_shader_module(wgpu::include_wgsl!("text.wgsl"));
 
@@ -41,7 +44,10 @@ impl TextRenderer {
             }),
             primitive: Default::default(),
             depth_stencil: None,
-            multisample: Default::default(),
+            multisample: wgpu::MultisampleState {
+                count: samples,
+                ..Default::default()
+            },
             multiview_mask: None,
             cache: None,
         });
@@ -50,6 +56,8 @@ impl TextRenderer {
             pipeline,
             vertices: None,
             vertex_count: 0,
+            samples,
+            msaa_target: None,
         };
         renderer.update_vertices(device, vertices)?;
         Ok(renderer)
@@ -72,16 +80,53 @@ impl TextRenderer {
         Ok(())
     }
 
-    pub fn render(&self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {
+    pub fn render(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+    ) {
+        let surface = view.texture();
+        let size = surface.size();
+        let format = surface.format();
+
+        if self.samples > 1
+            && self
+                .msaa_target
+                .as_ref()
+                .is_none_or(|target| target.size() != size || target.format() != format)
+        {
+            self.msaa_target = Some(device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("text MSAA target"),
+                size,
+                mip_level_count: 1,
+                sample_count: self.samples,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            }));
+        }
+
+        let msaa_view = self
+            .msaa_target
+            .as_ref()
+            .map(|target| target.create_view(&Default::default()));
+
+        let (attachment, resolve_target, store) = match &msaa_view {
+            Some(msaa) => (msaa, Some(view), wgpu::StoreOp::Discard),
+            None => (view, None, wgpu::StoreOp::Store),
+        };
+
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("page text"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
+                view: attachment,
                 depth_slice: None,
-                resolve_target: None,
+                resolve_target,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
-                    store: wgpu::StoreOp::Store,
+                    store,
                 },
             })],
             depth_stencil_attachment: None,
