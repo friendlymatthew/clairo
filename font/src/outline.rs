@@ -1,6 +1,8 @@
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, anyhow, bail, ensure};
 
-use crate::grammar::{Glyph, TrueTypeFontFile};
+use crate::grammar::{
+    ComponentGlyphArgument, ComponentGlyphTransformation, Glyph, TrueTypeFontFile,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Point {
@@ -47,45 +49,124 @@ impl Segment {
 
 pub type Contour = Vec<Segment>;
 
+type ContourPoints = Vec<(Point, bool)>;
+
 pub fn outline(font: &TrueTypeFontFile, glyph_id: u16) -> Result<Vec<Contour>> {
-    let g = &font.glyph_table.glyphs[glyph_id as usize];
+    Ok(outline_points(font, glyph_id, 0)?
+        .iter()
+        .map(|points| walk_contour(points))
+        .collect())
+}
 
-    match g {
-        Glyph::Simple(simple_glyph) => {
-            let mut contours = Vec::new();
+fn outline_points(font: &TrueTypeFontFile, glyph_id: u16, depth: u8) -> Result<Vec<ContourPoints>> {
+    ensure!(depth <= 32, "compound glyph nesting is too deep");
+    let glyph = font
+        .glyph_table
+        .glyphs
+        .get(usize::from(glyph_id))
+        .ok_or_else(|| anyhow!("glyph {glyph_id} out of range"))?;
 
-            let points = simple_glyph
+    match glyph {
+        Glyph::Simple(simple) => {
+            let points = simple
                 .coordinates
                 .iter()
-                .zip(&simple_glyph.flags)
-                .map(|(&(x, y), f)| {
+                .zip(&simple.flags)
+                .map(|(&(x, y), flags)| {
                     (
                         Point {
-                            x: x as f32,
-                            y: y as f32,
+                            x: f32::from(x),
+                            y: f32::from(y),
                         },
-                        f.on_curve(),
+                        flags.on_curve(),
                     )
                 })
                 .collect::<Vec<_>>();
-
             let mut start = 0;
+            simple
+                .end_points_of_contours
+                .iter()
+                .map(|&end| {
+                    let end = usize::from(end);
+                    let contour = points
+                        .get(start..=end)
+                        .ok_or_else(|| anyhow!("contour end point {end} out of range"))?;
+                    start = end + 1;
+                    Ok(contour.to_vec())
+                })
+                .collect()
+        }
+        Glyph::Compound(compound) => {
+            let mut contours = Vec::<ContourPoints>::new();
+            for component in &compound.components {
+                use ComponentGlyphArgument::{Coord, Point as PointIndex};
+                use ComponentGlyphTransformation::{Affine, NonUniform, Uniform};
 
-            for &end in &simple_glyph.end_points_of_contours {
-                let end = end as usize;
-
-                let contour = points
-                    .get(start..=end)
-                    .ok_or_else(|| anyhow!("contour end point {end} out of range"))?;
-
-                contours.push(walk_contour(contour));
-                start = end + 1;
+                let one = 1_i16 << 14;
+                let matrix = match component.transformation {
+                    Uniform(scale) => [scale, 0, 0, scale],
+                    NonUniform { x_scale, y_scale } => [x_scale, 0, 0, y_scale],
+                    Affine {
+                        x_scale,
+                        scale_01,
+                        scale_10,
+                        y_scale,
+                    } => [x_scale, scale_10, scale_01, y_scale],
+                };
+                let [a, b, c, d] = matrix.map(|value| f32::from(value) / f32::from(one));
+                let transform = |Point { x, y }| Point {
+                    x: a * x + b * y,
+                    y: c * x + d * y,
+                };
+                let mut parts = outline_points(font, component.glyph_index, depth + 1)?;
+                for (point, _) in parts.iter_mut().flatten() {
+                    *point = transform(*point);
+                }
+                let mut offset = match (&component.arg_1, &component.arg_2) {
+                    (Coord(x), Coord(y)) => {
+                        let offset = Point {
+                            x: f32::from(*x),
+                            y: f32::from(*y),
+                        };
+                        if component.flag.0 & 0x0800 != 0 {
+                            transform(offset)
+                        } else {
+                            offset
+                        }
+                    }
+                    (PointIndex(parent), PointIndex(child)) => {
+                        let parent = contours
+                            .iter()
+                            .flatten()
+                            .nth(usize::from(*parent))
+                            .ok_or_else(|| anyhow!("compound parent point out of range"))?
+                            .0;
+                        let child = parts
+                            .iter()
+                            .flatten()
+                            .nth(usize::from(*child))
+                            .ok_or_else(|| anyhow!("compound child point out of range"))?
+                            .0;
+                        Point {
+                            x: parent.x - child.x,
+                            y: parent.y - child.y,
+                        }
+                    }
+                    _ => bail!("inconsistent compound glyph arguments"),
+                };
+                if component.flag.args_are_xy_values() && component.flag.round_xy_to_grid() {
+                    offset.x = offset.x.round();
+                    offset.y = offset.y.round();
+                }
+                for (point, _) in parts.iter_mut().flatten() {
+                    point.x += offset.x;
+                    point.y += offset.y;
+                }
+                contours.extend(parts);
             }
-
             Ok(contours)
         }
-        Glyph::Compound(_compound_glyph) => bail!("compound glyphs are not supported (yet)"),
-        Glyph::Empty => Ok(vec![]),
+        Glyph::Empty => Ok(Vec::new()),
     }
 }
 
@@ -250,12 +331,23 @@ mod tests {
     }
 
     #[test]
+    fn accented_compound_glyph_has_an_outline() -> Result<()> {
+        let font = TrueTypeFontParser::new(include_bytes!("../Lato-Regular.ttf")).parse()?;
+        let glyph = crate::shaper::TrueTypeFontShaper::from(&font).shape_char('é');
+        assert!(matches!(
+            font.glyph_table.glyphs[usize::from(glyph.glyph_id)],
+            Glyph::Compound(_)
+        ));
+        assert!(outline(&font, glyph.glyph_id)?.len() > 1);
+        Ok(())
+    }
+
+    #[test]
     fn every_simple_glyph_outline_is_closed() {
         let ttf_file = include_bytes!("../Lato-Regular.ttf");
         let ttf = TrueTypeFontParser::new(ttf_file).parse().unwrap();
 
         for (id, glyph) in ttf.glyph_table.glyphs.iter().enumerate() {
-            // compound glyphs are not supported yet
             let Glyph::Simple(simple) = glyph else {
                 continue;
             };

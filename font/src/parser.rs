@@ -298,17 +298,15 @@ impl<'a> TrueTypeFontParser<'a> {
                     .push(platform_double);
             }
 
-            let mut subtable_map = BTreeMap::new();
+            let mut subtable_map = BTreeMap::<_, Vec<_>>::new();
             for (offset, platform_doubles) in unique_offsets {
                 self.jump(cmap_offset + offset as usize, 0)?;
 
                 if let Some(subtable) = self.parse_cmap_subtable()? {
-                    assert!(
-                        !subtable_map.contains_key(&subtable),
-                        "Can cmap subtables be duplicated?"
-                    );
-
-                    subtable_map.insert(subtable, platform_doubles);
+                    subtable_map
+                        .entry(subtable)
+                        .or_default()
+                        .extend(platform_doubles);
                 }
             }
 
@@ -331,7 +329,7 @@ impl<'a> TrueTypeFontParser<'a> {
 
         let subtable = match format {
             0 => CMapSubtable::Zero(self.parse_cmap_subtable_format_0()?),
-            4 => CMapSubtable::Four(self.parse_cmap_subtable_format_4()?),
+            4 => CMapSubtable::Four(self.parse_cmap_subtable_format_4(offset + length)?),
             12 => CMapSubtable::Twelve(self.parse_cmap_subtable_format_12()?),
             2 | 6 | 8 | 10 | 13 | 14 => return Ok(None),
             foreign => bail!("Received unrecognized cmap table format: {foreign}."),
@@ -367,7 +365,7 @@ impl<'a> TrueTypeFontParser<'a> {
         })
     }
 
-    fn parse_cmap_subtable_format_4(&mut self) -> Result<CMapFormat4> {
+    fn parse_cmap_subtable_format_4(&mut self, end: usize) -> Result<CMapFormat4> {
         let language = self.read_u16()?;
         let seg_count_x2 = self.read_u16()?;
         let search_range = self.read_u16()?;
@@ -389,11 +387,11 @@ impl<'a> TrueTypeFontParser<'a> {
 
         let id_range_offset = self.read_vec(seg_count, Self::read_u16)?;
 
-        if !id_range_offset.iter().all(|&id| id == 0) {
-            bail!("cmap format 4 glyph index arrays are unsupported");
-        }
-
-        let glyph_index_array = vec![];
+        ensure!(
+            end >= self.cursor && (end - self.cursor).is_multiple_of(2),
+            "invalid cmap format 4 length"
+        );
+        let glyph_index_array = self.read_vec((end - self.cursor) / 2, Self::read_u16)?;
 
         Ok(CMapFormat4 {
             language,

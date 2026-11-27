@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::{Result, anyhow, bail, ensure};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
 use url::{Host, Position, Url};
 
@@ -35,6 +35,29 @@ pub fn get(url: &str) -> Result<Http1Response> {
         response.status.as_u16()
     );
     Ok(response)
+}
+
+pub fn get_following_redirects(url: &str) -> Result<(Url, Http1Response)> {
+    let mut url = Url::parse(url)?;
+    for _ in 0..=10 {
+        ensure!(url.scheme() == "https", "only https:// urls are supported");
+        let response = get_response(&url, None, None)?;
+        match response.status.as_u16() {
+            200 => return Ok((url, response)),
+            301 | 302 | 303 | 307 | 308 => {
+                let location = response
+                    .header("location")
+                    .context("redirect has no location")?;
+                let mut next = url.join(std::str::from_utf8(location)?)?;
+                if next.fragment().is_none() {
+                    next.set_fragment(url.fragment());
+                }
+                url = next;
+            }
+            status => bail!("HTTP {status} for {url}"),
+        }
+    }
+    bail!("too many redirects for {url}")
 }
 
 pub(crate) fn get_response(

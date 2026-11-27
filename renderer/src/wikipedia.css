@@ -1,0 +1,31 @@
+/* Reader defaults for Vector's article when its wider skin rules cannot be applied. */
+.mw-page-container { padding-left: 1.5rem; padding-right: 1.5rem; }
+main.mw-body { max-width: 59.25rem; margin: 1.5rem auto; color: #202122; }
+.vector-body { font-size: 1rem; line-height: 1.6; }
+.vector-page-titlebar { border-bottom: 1px solid #a2a9b1; margin-bottom: 0.6rem; }
+#firstHeading { font-size: 1.8rem; line-height: 1.375; }
+.vector-page-toolbar, .vector-column-end, .vector-dropdown, .vector-page-titlebar-toc,
+.vector-body-before-content, .mw-indicators, .noprint, .mw-editsection, .mw-empty-elt,
+.shortdescription, .mw-hidden-catlinks { display: none; }
+.mw-parser-output p { margin: 0 0 0.85em; }
+.mw-parser-output .hatnote { padding-left: 1.6em; margin-bottom: 0.5em; }
+.mw-parser-output .mw-heading2 {
+    font-size: 1.5rem; line-height: 1.375;
+    margin: 1em 0 0.25em; border-bottom: 1px solid #a2a9b1;
+}
+.mw-heading2 > h2 { display: inline; font-size: inherit; border-bottom: none; }
+.mw-heading3 { font-size: 1.2rem; margin: 0.8em 0 0.25em; }
+.mw-heading3 > h3 { display: inline; font-size: inherit; }
+.mw-parser-output ul, .mw-parser-output ol { padding-left: 1.6em; }
+.mw-parser-output blockquote { margin: 1em 2em; }
+.infobox {
+    float: right; width: 22em; max-width: 100%; box-sizing: border-box;
+    padding: 0.2em; margin: 0.5em 0 0.5em 1em;
+    background-color: #f8f9fa; font-size: 88%; line-height: 1.5;
+}
+.infobox tr { padding: 0.15em; }
+.infobox th, .infobox td { padding: 0.15em; }
+.infobox-above, .infobox-image, .infobox-caption, .infobox-header { text-align: center; }
+.infobox-above { font-size: 125%; }
+.infobox-image { padding: 0.25em; }
+.references { font-size: 90%; }

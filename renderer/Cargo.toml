@@ -12,8 +12,11 @@ anyhow.workspace = true
 font.workspace = true
 net.workspace = true
 html5ever = "0.39"
+cssparser = "0.38"
 markup5ever_rcdom = "0.39"
 pollster = "0.3"
 wgpu = "30.0.2"
 winit = "0.30.13"
 bytemuck = "1.16"
+url = "2.5.8"
+resvg = { version = "0.50.0", default-features = false }

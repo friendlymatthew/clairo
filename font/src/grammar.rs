@@ -215,7 +215,9 @@ impl CMapFormat4 {
             .binary_search(&char_code)
             .unwrap_or_else(|i| i);
 
-        let start_code = self.start_codes[i];
+        let Some(&start_code) = self.start_codes.get(i) else {
+            return 0;
+        };
 
         if start_code > char_code {
             // return missing character glyph.
@@ -228,7 +230,17 @@ impl CMapFormat4 {
             return ((self.id_deltas[i] as u32 + char_code as u32) & 0xFFFF) as usize;
         }
 
-        (id_range_offset + id_range_offset / 2 + (char_code - start_code)) as usize
+        let offset = i + usize::from(id_range_offset / 2) + usize::from(char_code - start_code);
+        let glyph = offset
+            .checked_sub(self.id_range_offset.len())
+            .and_then(|index| self.glyph_index_array.get(index))
+            .copied()
+            .unwrap_or(0);
+        if glyph == 0 {
+            0
+        } else {
+            usize::from(glyph.wrapping_add(self.id_deltas[i]))
+        }
     }
 }
 
@@ -595,4 +607,28 @@ pub enum ComponentGlyphTransformation {
         scale_10: F2Dot14,
         y_scale: F2Dot14,
     },
+}
+
+#[cfg(test)]
+mod cmap_tests {
+    use super::*;
+
+    #[test]
+    fn format_four_applies_delta_only_to_nonzero_array_glyphs() {
+        let cmap = CMapFormat4 {
+            language: 0,
+            seg_count_x2: 4,
+            search_range: 4,
+            entry_selector: 1,
+            range_shift: 0,
+            end_codes: vec![b'B'.into(), 0xffff],
+            start_codes: vec![b'A'.into(), 0xffff],
+            id_deltas: vec![2, 1],
+            id_range_offset: vec![4, 0],
+            glyph_index_array: vec![8, 0],
+        };
+        assert_eq!(cmap.find_glyph_index('A'), 10);
+        assert_eq!(cmap.find_glyph_index('B'), 0);
+        assert_eq!(cmap.find_glyph_index('C'), 0);
+    }
 }
