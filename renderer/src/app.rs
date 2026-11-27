@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use anyhow::{Context, Result, bail};
 use font::{TrueTypeFontParser, grammar::TrueTypeFontFile};
@@ -13,6 +13,7 @@ use winit::{
 
 use crate::{
     layout::{GlyphMeshCache, Viewport, layout_document, mesh_layout},
+    style::ElementStyles,
     text::TextRenderer,
 };
 
@@ -20,7 +21,7 @@ use crate::{
 pub fn run(dom: &Handle) -> Result<()> {
     let event_loop = EventLoop::new()?;
     let mut app = App {
-        dom,
+        page: Page::new(dom),
         renderer: None,
         error: None,
     };
@@ -29,13 +30,30 @@ pub fn run(dom: &Handle) -> Result<()> {
     app.error.map_or(Ok(()), Err)
 }
 
-struct App<'a> {
-    dom: &'a Handle,
+struct Page {
+    dom: Handle,
+    styles: ElementStyles,
+}
+
+impl Page {
+    fn new(dom: &Handle) -> Self {
+        let started = Instant::now();
+        let styles = ElementStyles::compute(dom);
+        eprintln!("style computation took {:?}", started.elapsed());
+        Self {
+            dom: dom.clone(),
+            styles,
+        }
+    }
+}
+
+struct App {
+    page: Page,
     renderer: Option<Renderer>,
     error: Option<anyhow::Error>,
 }
 
-impl ApplicationHandler for App<'_> {
+impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.renderer.is_some() {
             return;
@@ -48,7 +66,7 @@ impl ApplicationHandler for App<'_> {
         let result = event_loop
             .create_window(attributes)
             .context("could not create window")
-            .and_then(|window| pollster::block_on(Renderer::new(Arc::new(window), self.dom)));
+            .and_then(|window| pollster::block_on(Renderer::new(Arc::new(window), &self.page)));
 
         match result {
             Ok(renderer) => {
@@ -70,13 +88,13 @@ impl ApplicationHandler for App<'_> {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
-                if let Err(error) = renderer.resize(size, self.dom) {
+                if let Err(error) = renderer.resize(size, &self.page) {
                     self.error = Some(error);
                     event_loop.exit();
                 }
             }
             WindowEvent::ScaleFactorChanged { .. } => {
-                if let Err(error) = renderer.resize(renderer.window.inner_size(), self.dom) {
+                if let Err(error) = renderer.resize(renderer.window.inner_size(), &self.page) {
                     self.error = Some(error);
                     event_loop.exit();
                 }
@@ -105,7 +123,8 @@ struct Renderer {
 }
 
 impl Renderer {
-    async fn new(window: Arc<Window>, dom: &Handle) -> Result<Self> {
+    async fn new(window: Arc<Window>, page: &Page) -> Result<Self> {
+        let started = Instant::now();
         let instance = wgpu::Instance::default();
         let surface = instance.create_surface(window.clone())?;
 
@@ -126,17 +145,29 @@ impl Renderer {
             .context("window has no supported GPU surface configuration")?;
 
         surface.configure(&device, &config);
+        eprintln!("gpu initialization took {:?}", started.elapsed());
 
         let viewport = Viewport::new(&window);
+
+        let started = Instant::now();
         let font = TrueTypeFontParser::new(include_bytes!("../../font/Lato-Regular.ttf"))
             .parse()
             .context("could not parse Lato")?;
 
-        let tree = layout_document(dom, &viewport, &font);
+        eprintln!("font parsing took {:?}", started.elapsed());
 
         let mut glyph_meshes = GlyphMeshCache::new();
+        let started = Instant::now();
+        let tree = layout_document(&page.dom, &page.styles, &viewport, &font);
+        eprintln!("layout took {:?}", started.elapsed());
+
+        let started = Instant::now();
         let vertices = mesh_layout(&tree, &font, &viewport, &mut glyph_meshes)?;
+        eprintln!("glyph meshing took {:?}", started.elapsed());
+
+        let started = Instant::now();
         let text = TextRenderer::new(&device, config.format, &vertices)?;
+        eprintln!("Text renderer setup took {:?}", started.elapsed());
 
         Ok(Self {
             window,
@@ -150,13 +181,13 @@ impl Renderer {
         })
     }
 
-    fn resize(&mut self, size: PhysicalSize<u32>, dom: &Handle) -> Result<()> {
+    fn resize(&mut self, size: PhysicalSize<u32>, page: &Page) -> Result<()> {
         if size.width == 0 || size.height == 0 {
             return Ok(());
         }
 
         let viewport = Viewport::new(&self.window);
-        let tree = layout_document(dom, &viewport, &self.font);
+        let tree = layout_document(&page.dom, &page.styles, &viewport, &self.font);
         let vertices = mesh_layout(&tree, &self.font, &viewport, &mut self.glyph_meshes)?;
         self.text.update_vertices(&self.device, &vertices)?;
 

@@ -47,13 +47,12 @@ struct TextLine {
     font_size_px: f32,
 }
 
-pub fn layout_document(
+pub(crate) fn layout_document(
     root: &Handle,
+    element_styles: &ElementStyles,
     viewport: &Viewport,
     font: &TrueTypeFontFile<'_>,
 ) -> LayoutTree {
-    let element_styles = ElementStyles::compute(root);
-
     let mut blocks = Vec::new();
     let mut y = 0.0;
 
@@ -73,7 +72,7 @@ pub fn layout_document(
         if let Some(style) =
             style.filter(|style| is_h1_or_p && matches!(style.display, Display::Block))
         {
-            let text = collect_visible_text(&node, &element_styles);
+            let text = collect_visible_text(&node, element_styles);
             let width = resolve_width(&style.width, viewport.width);
             let lines = wrap_text(font, &text, width, style.font_size_px);
 
