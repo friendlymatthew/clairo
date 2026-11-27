@@ -1,13 +1,14 @@
-use std::{sync::Arc, time::Instant};
+use std::{sync::Arc, thread, time::Instant};
 
 use anyhow::{Context, Result, bail};
 use font::{TrueTypeFontParser, grammar::TrueTypeFontFile};
-use markup5ever_rcdom::Handle;
+use html5ever::{parse_document, tendril::TendrilSink};
+use markup5ever_rcdom::{Handle, RcDom};
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
     event::WindowEvent,
-    event_loop::{ActiveEventLoop, EventLoop},
+    event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy},
     window::{Window, WindowId},
 };
 
@@ -18,10 +19,12 @@ use crate::{
 };
 
 /// the entry point to all of my problems
-pub fn run(dom: &Handle) -> Result<()> {
-    let event_loop = EventLoop::new()?;
+pub fn run(url: String) -> Result<()> {
+    let event_loop = EventLoop::<PageLoaded>::with_user_event().build()?;
     let mut app = App {
-        page: Page::new(dom),
+        url,
+        proxy: event_loop.create_proxy(),
+        page: None,
         renderer: None,
         error: None,
     };
@@ -30,30 +33,38 @@ pub fn run(dom: &Handle) -> Result<()> {
     app.error.map_or(Ok(()), Err)
 }
 
+struct PageLoaded(Result<Vec<u8>>);
+
 struct Page {
     dom: Handle,
     styles: ElementStyles,
 }
 
 impl Page {
-    fn new(dom: &Handle) -> Self {
+    fn from_html(html: &[u8]) -> Self {
         let started = Instant::now();
-        let styles = ElementStyles::compute(dom);
+        let dom = parse_document(RcDom::default(), Default::default())
+            .from_utf8()
+            .one(html)
+            .document;
+        eprintln!("html parsing took {:?}", started.elapsed());
+
+        let started = Instant::now();
+        let styles = ElementStyles::compute(&dom);
         eprintln!("style computation took {:?}", started.elapsed());
-        Self {
-            dom: dom.clone(),
-            styles,
-        }
+        Self { dom, styles }
     }
 }
 
 struct App {
-    page: Page,
+    url: String,
+    proxy: EventLoopProxy<PageLoaded>,
+    page: Option<Page>,
     renderer: Option<Renderer>,
     error: Option<anyhow::Error>,
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<PageLoaded> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.renderer.is_some() {
             return;
@@ -66,13 +77,49 @@ impl ApplicationHandler for App {
         let result = event_loop
             .create_window(attributes)
             .context("could not create window")
-            .and_then(|window| pollster::block_on(Renderer::new(Arc::new(window), &self.page)));
+            .and_then(|window| {
+                let mut renderer = pollster::block_on(Renderer::new(Arc::new(window)))?;
+                renderer.draw()?;
+                renderer.window.request_redraw();
+
+                // fetch and decode the wikipedia page on a background thread
+                let url = self.url.clone();
+                let proxy = self.proxy.clone();
+                thread::Builder::new()
+                    .name("page-fetch".into())
+                    .spawn(move || {
+                        let _ = proxy.send_event(PageLoaded(fetch_html(&url)));
+                    })
+                    .context("could not start page fetch")?;
+
+                Ok(renderer)
+            });
 
         match result {
             Ok(renderer) => {
-                renderer.window.request_redraw();
                 self.renderer = Some(renderer);
             }
+            Err(error) => {
+                self.error = Some(error);
+                event_loop.exit();
+            }
+        }
+    }
+
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, PageLoaded(result): PageLoaded) {
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
+
+        let result = result.and_then(|html| {
+            let page = Page::from_html(&html);
+            renderer.show_page(&page)?;
+
+            Ok(page)
+        });
+
+        match result {
+            Ok(page) => self.page = Some(page),
             Err(error) => {
                 self.error = Some(error);
                 event_loop.exit();
@@ -88,13 +135,15 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
-                if let Err(error) = renderer.resize(size, &self.page) {
+                if let Err(error) = renderer.resize(size, self.page.as_ref()) {
                     self.error = Some(error);
                     event_loop.exit();
                 }
             }
             WindowEvent::ScaleFactorChanged { .. } => {
-                if let Err(error) = renderer.resize(renderer.window.inner_size(), &self.page) {
+                if let Err(error) =
+                    renderer.resize(renderer.window.inner_size(), self.page.as_ref())
+                {
                     self.error = Some(error);
                     event_loop.exit();
                 }
@@ -123,7 +172,7 @@ struct Renderer {
 }
 
 impl Renderer {
-    async fn new(window: Arc<Window>, page: &Page) -> Result<Self> {
+    async fn new(window: Arc<Window>) -> Result<Self> {
         let started = Instant::now();
         let instance = wgpu::Instance::default();
         let surface = instance.create_surface(window.clone())?;
@@ -147,8 +196,6 @@ impl Renderer {
         surface.configure(&device, &config);
         eprintln!("gpu initialization took {:?}", started.elapsed());
 
-        let viewport = Viewport::new(&window);
-
         let started = Instant::now();
         let font = TrueTypeFontParser::new(include_bytes!("../../font/Lato-Regular.ttf"))
             .parse()
@@ -156,17 +203,8 @@ impl Renderer {
 
         eprintln!("font parsing took {:?}", started.elapsed());
 
-        let mut glyph_meshes = GlyphMeshCache::new();
         let started = Instant::now();
-        let tree = layout_document(&page.dom, &page.styles, &viewport, &font);
-        eprintln!("layout took {:?}", started.elapsed());
-
-        let started = Instant::now();
-        let vertices = mesh_layout(&tree, &font, &viewport, &mut glyph_meshes)?;
-        eprintln!("glyph meshing took {:?}", started.elapsed());
-
-        let started = Instant::now();
-        let text = TextRenderer::new(&device, config.format, &vertices)?;
+        let text = TextRenderer::new(&device, config.format, &[])?;
         eprintln!("Text renderer setup took {:?}", started.elapsed());
 
         Ok(Self {
@@ -177,19 +215,51 @@ impl Renderer {
             config,
             font,
             text,
-            glyph_meshes,
+            glyph_meshes: GlyphMeshCache::new(),
         })
     }
 
-    fn resize(&mut self, size: PhysicalSize<u32>, page: &Page) -> Result<()> {
+    fn show_page(&mut self, page: &Page) -> Result<()> {
+        self.update_page_vertices(page, true)?;
+        self.window.request_redraw();
+
+        Ok(())
+    }
+
+    fn update_page_vertices(&mut self, page: &Page, print_timings: bool) -> Result<()> {
+        let viewport = Viewport::new(&self.window);
+        let started = print_timings.then(Instant::now);
+        let tree = layout_document(&page.dom, &page.styles, &viewport, &self.font);
+
+        if let Some(started) = started {
+            eprintln!("layout took {:?}", started.elapsed());
+        }
+
+        let started = print_timings.then(Instant::now);
+        let vertices = mesh_layout(&tree, &self.font, &viewport, &mut self.glyph_meshes)?;
+
+        if let Some(started) = started {
+            eprintln!("glyph meshing took {:?}", started.elapsed());
+        }
+
+        let started = print_timings.then(Instant::now);
+        self.text.update_vertices(&self.device, &vertices)?;
+
+        if let Some(started) = started {
+            eprintln!("text vertex upload took {:?}", started.elapsed());
+        }
+
+        Ok(())
+    }
+
+    fn resize(&mut self, size: PhysicalSize<u32>, page: Option<&Page>) -> Result<()> {
         if size.width == 0 || size.height == 0 {
             return Ok(());
         }
 
-        let viewport = Viewport::new(&self.window);
-        let tree = layout_document(&page.dom, &page.styles, &viewport, &self.font);
-        let vertices = mesh_layout(&tree, &self.font, &viewport, &mut self.glyph_meshes)?;
-        self.text.update_vertices(&self.device, &vertices)?;
+        if let Some(page) = page {
+            self.update_page_vertices(page, false)?;
+        }
 
         self.config.width = size.width;
         self.config.height = size.height;
@@ -224,4 +294,15 @@ impl Renderer {
 
         Ok(())
     }
+}
+
+fn fetch_html(url: &str) -> Result<Vec<u8>> {
+    let started = Instant::now();
+    let response = net::http1::get(url)?;
+    eprintln!("http fetch took {:?}", started.elapsed());
+
+    let started = Instant::now();
+    let html = response.decoded_body()?.into_owned();
+    eprintln!("http body decoding took {:?}", started.elapsed());
+    Ok(html)
 }
