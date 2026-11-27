@@ -12,7 +12,7 @@ use winit::{
 };
 
 use crate::{
-    layout::{Viewport, layout_document, mesh_layout},
+    layout::{GlyphMeshCache, Viewport, layout_document, mesh_layout},
     text::TextRenderer,
 };
 
@@ -101,6 +101,7 @@ struct Renderer {
     config: wgpu::SurfaceConfiguration,
     font: TrueTypeFontFile<'static>,
     text: TextRenderer,
+    glyph_meshes: GlyphMeshCache,
 }
 
 impl Renderer {
@@ -133,7 +134,8 @@ impl Renderer {
 
         let tree = layout_document(dom, &viewport, &font);
 
-        let vertices = mesh_layout(&tree, &font, &viewport)?;
+        let mut glyph_meshes = GlyphMeshCache::new();
+        let vertices = mesh_layout(&tree, &font, &viewport, &mut glyph_meshes)?;
         let text = TextRenderer::new(&device, config.format, &vertices)?;
 
         Ok(Self {
@@ -144,6 +146,7 @@ impl Renderer {
             config,
             font,
             text,
+            glyph_meshes,
         })
     }
 
@@ -154,7 +157,7 @@ impl Renderer {
 
         let viewport = Viewport::new(&self.window);
         let tree = layout_document(dom, &viewport, &self.font);
-        let vertices = mesh_layout(&tree, &self.font, &viewport)?;
+        let vertices = mesh_layout(&tree, &self.font, &viewport, &mut self.glyph_meshes)?;
         self.text.update_vertices(&self.device, &vertices)?;
 
         self.config.width = size.width;

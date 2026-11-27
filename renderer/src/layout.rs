@@ -1,3 +1,5 @@
+use std::collections::{HashMap, hash_map::Entry};
+
 use anyhow::Result;
 use font::{
     grammar::TrueTypeFontFile,
@@ -206,10 +208,13 @@ fn collect_visible_text(root: &Handle, styles: &ElementStyles) -> String {
     text.split_ascii_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+pub(crate) type GlyphMeshCache = HashMap<u16, Vec<GlyphVertex>>;
+
 pub(crate) fn mesh_layout(
     tree: &LayoutTree,
     font: &TrueTypeFontFile<'_>,
     viewport: &Viewport,
+    glyph_meshes: &mut GlyphMeshCache,
 ) -> Result<Vec<GlyphVertex>> {
     let mut vertices = Vec::new();
 
@@ -220,15 +225,29 @@ pub(crate) fn mesh_layout(
     let shaper = TrueTypeFontShaper::from(font);
 
     let units_per_em = f32::from(font.head_table.units_per_em);
+    let font_y_min = f32::from(font.head_table.y_min);
+    let font_y_max = f32::from(font.head_table.y_max);
+
     for block in &tree.blocks {
         for line in &block.lines {
             let scale = line.font_size_px / units_per_em;
+
+            let top = line.baseline_y - font_y_max * scale;
+            let bottom = line.baseline_y - font_y_min * scale;
+            if bottom <= 0.0 || top >= viewport.height {
+                continue;
+            }
 
             let mut pen_x = block.x;
 
             for ch in line.text.chars() {
                 let glyph = shaper.shape_char(ch);
-                for mut vertex in mesh(&outline(font, glyph.glyph_id)?)? {
+                let glyph_vertices = match glyph_meshes.entry(glyph.glyph_id) {
+                    Entry::Occupied(entry) => entry.into_mut(),
+                    Entry::Vacant(entry) => entry.insert(mesh(&outline(font, glyph.glyph_id)?)?),
+                };
+
+                for mut vertex in glyph_vertices.iter().copied() {
                     let [x, y] = vertex.position;
                     let page_x = pen_x + x * scale;
                     let page_y = line.baseline_y - y * scale;
