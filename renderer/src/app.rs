@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
+use font::{TrueTypeFontParser, grammar::TrueTypeFontFile};
+use markup5ever_rcdom::Handle;
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
@@ -9,13 +11,16 @@ use winit::{
     window::{Window, WindowId},
 };
 
-use super::text::TextRenderer;
+use crate::{
+    layout::{Viewport, layout_document, mesh_layout},
+    text::TextRenderer,
+};
 
 /// the entry point to all of my problems
-pub fn run(text: &str) -> Result<()> {
+pub fn run(dom: &Handle) -> Result<()> {
     let event_loop = EventLoop::new()?;
     let mut app = App {
-        text,
+        dom,
         renderer: None,
         error: None,
     };
@@ -25,7 +30,7 @@ pub fn run(text: &str) -> Result<()> {
 }
 
 struct App<'a> {
-    text: &'a str,
+    dom: &'a Handle,
     renderer: Option<Renderer>,
     error: Option<anyhow::Error>,
 }
@@ -43,7 +48,7 @@ impl ApplicationHandler for App<'_> {
         let result = event_loop
             .create_window(attributes)
             .context("could not create window")
-            .and_then(|window| pollster::block_on(Renderer::new(Arc::new(window), self.text)));
+            .and_then(|window| pollster::block_on(Renderer::new(Arc::new(window), self.dom)));
 
         match result {
             Ok(renderer) => {
@@ -64,7 +69,18 @@ impl ApplicationHandler for App<'_> {
 
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::Resized(size) => renderer.resize(size),
+            WindowEvent::Resized(size) => {
+                if let Err(error) = renderer.resize(size, self.dom) {
+                    self.error = Some(error);
+                    event_loop.exit();
+                }
+            }
+            WindowEvent::ScaleFactorChanged { .. } => {
+                if let Err(error) = renderer.resize(renderer.window.inner_size(), self.dom) {
+                    self.error = Some(error);
+                    event_loop.exit();
+                }
+            }
             WindowEvent::Occluded(false) => renderer.window.request_redraw(),
             WindowEvent::RedrawRequested => {
                 if let Err(error) = renderer.draw() {
@@ -83,11 +99,12 @@ struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
+    font: TrueTypeFontFile<'static>,
     text: TextRenderer,
 }
 
 impl Renderer {
-    async fn new(window: Arc<Window>, text: &str) -> Result<Self> {
+    async fn new(window: Arc<Window>, dom: &Handle) -> Result<Self> {
         let instance = wgpu::Instance::default();
         let surface = instance.create_surface(window.clone())?;
 
@@ -109,7 +126,15 @@ impl Renderer {
 
         surface.configure(&device, &config);
 
-        let text = TextRenderer::new(&device, config.format, text)?;
+        let viewport = Viewport::new(&window);
+        let font = TrueTypeFontParser::new(include_bytes!("../../font/Lato-Regular.ttf"))
+            .parse()
+            .context("could not parse Lato")?;
+
+        let tree = layout_document(dom, &viewport, &font);
+
+        let vertices = mesh_layout(&tree, &font, &viewport)?;
+        let text = TextRenderer::new(&device, config.format, &vertices)?;
 
         Ok(Self {
             window,
@@ -117,19 +142,26 @@ impl Renderer {
             device,
             queue,
             config,
+            font,
             text,
         })
     }
 
-    fn resize(&mut self, size: PhysicalSize<u32>) {
+    fn resize(&mut self, size: PhysicalSize<u32>, dom: &Handle) -> Result<()> {
         if size.width == 0 || size.height == 0 {
-            return;
+            return Ok(());
         }
+
+        let viewport = Viewport::new(&self.window);
+        let tree = layout_document(dom, &viewport, &self.font);
+        let vertices = mesh_layout(&tree, &self.font, &viewport)?;
+        self.text.update_vertices(&self.device, &vertices)?;
 
         self.config.width = size.width;
         self.config.height = size.height;
         self.surface.configure(&self.device, &self.config);
         self.window.request_redraw();
+        Ok(())
     }
 
     fn draw(&mut self) -> Result<()> {
@@ -150,8 +182,7 @@ impl Renderer {
 
         let mut encoder = self.device.create_command_encoder(&Default::default());
 
-        self.text
-            .render(&mut encoder, &view, self.config.width, self.config.height);
+        self.text.render(&mut encoder, &view);
 
         self.queue.submit([encoder.finish()]);
         self.window.pre_present_notify();

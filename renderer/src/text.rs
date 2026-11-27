@@ -1,20 +1,18 @@
-use anyhow::{Context, Result};
-use font::TrueTypeFontParser;
+use anyhow::Result;
+use font::GlyphVertex;
 use wgpu::util::DeviceExt;
 
 pub struct TextRenderer {
     pipeline: wgpu::RenderPipeline,
     vertices: Option<wgpu::Buffer>,
     vertex_count: u32,
-    width: f32,
-    height: f32,
 }
 
 impl TextRenderer {
     pub fn new(
         device: &wgpu::Device,
         surface_format: wgpu::TextureFormat,
-        text: &str,
+        vertices: &[GlyphVertex],
     ) -> Result<Self> {
         let shader = device.create_shader_module(wgpu::include_wgsl!("text.wgsl"));
 
@@ -48,35 +46,33 @@ impl TextRenderer {
             cache: None,
         });
 
-        let font = TrueTypeFontParser::new(include_bytes!("../../font/Lato-Regular.ttf"))
-            .parse()
-            .context("could not parse Lato")?;
+        let mut renderer = Self {
+            pipeline,
+            vertices: None,
+            vertex_count: 0,
+        };
+        renderer.update_vertices(device, vertices)?;
+        Ok(renderer)
+    }
 
-        let geometry = crate::layout::layout_text(&font, text)?;
-        let vertices = (!geometry.vertices.is_empty()).then(|| {
+    pub fn update_vertices(
+        &mut self,
+        device: &wgpu::Device,
+        vertices: &[GlyphVertex],
+    ) -> Result<()> {
+        let vertex_count = vertices.len().try_into()?;
+        self.vertices = (!vertices.is_empty()).then(|| {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("glyph triangles"),
-                contents: bytemuck::cast_slice(&geometry.vertices),
+                contents: bytemuck::cast_slice(vertices),
                 usage: wgpu::BufferUsages::VERTEX,
             })
         });
-
-        Ok(Self {
-            pipeline,
-            vertices,
-            vertex_count: geometry.vertices.len().try_into()?,
-            width: geometry.width,
-            height: geometry.height,
-        })
+        self.vertex_count = vertex_count;
+        Ok(())
     }
 
-    pub fn render(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
-        width: u32,
-        height: u32,
-    ) {
+    pub fn render(&self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("page text"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -94,11 +90,6 @@ impl TextRenderer {
             multiview_mask: None,
         });
 
-        let scale = ((width as f32) / self.width)
-            .min((height as f32) / self.height)
-            .min(1.0);
-
-        pass.set_viewport(0., 0., self.width * scale, self.height * scale, 0., 1.);
         pass.set_pipeline(&self.pipeline);
         if let Some(vertices) = &self.vertices {
             pass.set_vertex_buffer(0, vertices.slice(..));

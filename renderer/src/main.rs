@@ -10,7 +10,11 @@ fn main() -> Result<()> {
     let response = net::http1::get(&url)?;
     let body = response.decoded_body()?;
 
-    clairo_renderer::run(&page_line(body.as_ref())?)
+    let dom = parse_document(RcDom::default(), Default::default())
+        .from_utf8()
+        .one(body.as_ref());
+
+    clairo_renderer::run(&dom.document)
 }
 
 // this is all just faff to grab some text from a valid wikipedia html...
